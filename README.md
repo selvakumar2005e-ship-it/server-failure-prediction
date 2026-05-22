@@ -36,4 +36,4 @@ in real-time using 11 server health metrics.
 - 🟡 MEDIUM : Probability 30–60%  
 - 🔴 HIGH   : Probability > 60%
 
-## Project — BITS ZC229T Design Project
+## Group 83 — BITS Design Project
