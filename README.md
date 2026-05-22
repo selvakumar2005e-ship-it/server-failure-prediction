@@ -5,7 +5,7 @@ A machine learning system that predicts server failures
 in real-time using 11 server health metrics.
 
 ## 🔗 Live Application
-👉 [Click here to open the app](YOUR_STREAMLIT_URL_HERE)
+👉 [Click here to open the app](https://server-failure-prediction-z6qcera9zkhtumjjxoom2y.streamlit.app/)
 
 ## Dataset
 - 100,000 server monitoring records
