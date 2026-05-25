@@ -39,10 +39,123 @@ def get_risk(prob):
     else:
         return "🔴 HIGH RISK", "error"
 
-# ── Header ──────────────────────────────────────────────────
-st.title("🖥️ Server Failure Prediction System")
-st.markdown("**100K Dataset | Random Forest | F1-Score: 0.9847 | Recall: 1.0000**")
-st.markdown("---")
+def get_failure_reasons(cpu, memory, disk, network, processes, threads,
+                        context_sw, cache_miss, temperature, power, uptime):
+    reasons = []
+    if cpu > 85:
+        reasons.append(f"CPU critical ({cpu:.0f}%)")
+    elif cpu > 70:
+        reasons.append(f"CPU high ({cpu:.0f}%)")
+    if memory > 90:
+        reasons.append(f"Memory critical ({memory:.0f}%)")
+    elif memory > 75:
+        reasons.append(f"Memory high ({memory:.0f}%)")
+    if temperature > 85:
+        reasons.append(f"Overheating ({temperature:.0f}°C)")
+    elif temperature > 75:
+        reasons.append(f"Temp elevated ({temperature:.0f}°C)")
+    if network > 150:
+        reasons.append(f"Network latency critical ({network:.0f}ms)")
+    elif network > 100:
+        reasons.append(f"Network latency high ({network:.0f}ms)")
+    if power > 250:
+        reasons.append(f"Power draw critical ({power:.0f}W)")
+    elif power > 200:
+        reasons.append(f"Power draw high ({power:.0f}W)")
+    if cache_miss > 0.15:
+        reasons.append(f"High cache miss rate ({cache_miss:.2f})")
+    if not reasons:
+        reasons.append("Metrics within normal range")
+    return ", ".join(reasons)
+
+def predict_batch(df):
+    results = []
+    feature_cols = ["cpu", "memory", "disk", "network",
+                    "processes", "threads", "context_sw", "cache_miss",
+                    "temperature", "power", "uptime"]
+    for _, row in df.iterrows():
+        raw = np.array([[row["cpu"], row["memory"], row["disk"], row["network"],
+                         row["processes"], row["threads"], row["context_sw"],
+                         row["cache_miss"], row["temperature"],
+                         row["power"], row["uptime"]]])
+        scaled = scaler.transform(raw)
+        full_inp = add_engineered_features(scaled, row["cpu"], row["memory"], row["temperature"])
+        pred = model.predict(full_inp)[0]
+        prob = model.predict_proba(full_inp)[0][1]
+        risk_label, _ = get_risk(prob)
+        reason = get_failure_reasons(
+            row["cpu"], row["memory"], row["disk"], row["network"],
+            row["processes"], row["threads"], row["context_sw"],
+            row["cache_miss"], row["temperature"], row["power"], row["uptime"]
+        )
+        results.append({
+            "Prediction": "⚠️ FAILURE" if pred == 1 else "✅ NORMAL",
+            "Failure Prob": f"{prob*100:.1f}%",
+            "Risk Level": risk_label,
+            "Failure Reason": reason,
+            "_prob": prob,
+            "_pred": pred,
+        })
+    return pd.DataFrame(results)
+
+def generate_sample_fleet(n=20):
+    np.random.seed(42)
+    data = []
+    for i in range(n):
+        failure_mode = np.random.choice(
+            ["normal", "cpu_overload", "memory_overload", "overheating", "network_issue"],
+            p=[0.55, 0.15, 0.12, 0.10, 0.08]
+        )
+        if failure_mode == "cpu_overload":
+            cpu = np.random.uniform(87, 99)
+            memory = np.random.uniform(40, 80)
+            temp = np.random.uniform(55, 78)
+            network = np.random.uniform(20, 90)
+        elif failure_mode == "memory_overload":
+            cpu = np.random.uniform(40, 75)
+            memory = np.random.uniform(92, 99)
+            temp = np.random.uniform(55, 78)
+            network = np.random.uniform(20, 90)
+        elif failure_mode == "overheating":
+            cpu = np.random.uniform(60, 85)
+            memory = np.random.uniform(50, 80)
+            temp = np.random.uniform(87, 95)
+            network = np.random.uniform(20, 90)
+        elif failure_mode == "network_issue":
+            cpu = np.random.uniform(30, 65)
+            memory = np.random.uniform(40, 70)
+            temp = np.random.uniform(45, 70)
+            network = np.random.uniform(155, 200)
+        else:
+            cpu = np.random.uniform(10, 68)
+            memory = np.random.uniform(20, 72)
+            temp = np.random.uniform(35, 72)
+            network = np.random.uniform(5, 95)
+
+        data.append({
+            "server_id": f"SRV-{i+1:03d}",
+            "cpu": round(cpu, 1),
+            "memory": round(memory, 1),
+            "disk": round(np.random.uniform(2, 45), 1),
+            "network": round(network, 1),
+            "processes": int(np.random.randint(80, 950)),
+            "threads": int(np.random.randint(200, 4800)),
+            "context_sw": int(np.random.randint(150, 1900)),
+            "cache_miss": round(np.random.uniform(0.01, 0.19), 2),
+            "temperature": round(temp, 1),
+            "power": round(np.random.uniform(60, 290), 1),
+            "uptime": round(np.random.uniform(1, 990), 1),
+        })
+    return pd.DataFrame(data)
+
+def color_risk_row(row):
+    prob = row["_prob"]
+    if prob >= 0.60:
+        return ["background-color: #ffcccc"] * len(row)
+    elif prob >= 0.30:
+        return ["background-color: #fff3cd"] * len(row)
+    else:
+        return ["background-color: #d4edda"] * len(row)
 
 # ── Sidebar ─────────────────────────────────────────────────
 with st.sidebar:
@@ -64,138 +177,297 @@ with st.sidebar:
     st.markdown("2. Memory > 90%")
     st.markdown("3. Temperature > 85°C")
 
-# ── Input ────────────────────────────────────────────────────
-st.header("📥 Enter Server Metrics")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.subheader("💻 System")
-    cpu     = st.slider("CPU Utilization (%)", 0.0, 100.0, 50.0, 0.5)
-    memory  = st.slider("Memory Usage (%)", 0.0, 100.0, 55.0, 0.5)
-    disk    = st.slider("Disk I/O (MB/s)", 0.0, 50.0, 25.0, 0.5)
-    network = st.slider("Network Latency (ms)", 0.0, 200.0, 100.0, 1.0)
-
-with col2:
-    st.subheader("⚙️ Process")
-    processes  = st.number_input("Process Count", 50, 999, 400, 10)
-    threads    = st.number_input("Thread Count", 100, 4999, 1500, 50)
-    context_sw = st.number_input("Context Switches", 100, 1999, 900, 50)
-    cache_miss = st.slider("Cache Miss Rate", 0.01, 0.20, 0.08, 0.01)
-
-with col3:
-    st.subheader("🌡️ Hardware")
-    temperature = st.slider("Temperature (°C)", 30.0, 95.0, 60.0, 0.5)
-    power       = st.slider("Power (W)", 50.0, 300.0, 175.0, 5.0)
-    uptime      = st.number_input("Uptime (hours)", 1.0, 1000.0, 300.0, 10.0)
-
-# ── Live Health Indicators ───────────────────────────────────
+# ── Title ────────────────────────────────────────────────────
+st.title("🖥️ Server Failure Prediction System")
+st.markdown("**100K Dataset | Random Forest | F1-Score: 0.9847 | Recall: 1.0000**")
 st.markdown("---")
-st.subheader("⚠️ Live Health Status")
-h1, h2, h3, h4 = st.columns(4)
-with h1:
-    if cpu > 85:      st.error(f"🔴 CPU: {cpu}% — Critical")
-    elif cpu > 70:    st.warning(f"🟡 CPU: {cpu}% — High")
-    else:             st.success(f"🟢 CPU: {cpu}% — Normal")
-with h2:
-    if memory > 90:   st.error(f"🔴 Memory: {memory}% — Critical")
-    elif memory > 75: st.warning(f"🟡 Memory: {memory}% — High")
-    else:             st.success(f"🟢 Memory: {memory}% — Normal")
-with h3:
-    if temperature > 85:   st.error(f"🔴 Temp: {temperature}°C — Critical")
-    elif temperature > 75: st.warning(f"🟡 Temp: {temperature}°C — High")
-    else:                  st.success(f"🟢 Temp: {temperature}°C — Normal")
-with h4:
-    if network > 150:  st.error(f"🔴 Latency: {network}ms — Critical")
-    elif network > 100:st.warning(f"🟡 Latency: {network}ms — High")
-    else:              st.success(f"🟢 Latency: {network}ms — Normal")
 
-# ── Predict Button ───────────────────────────────────────────
-st.markdown("---")
-if st.button("🔍 PREDICT FAILURE RISK", type="primary", use_container_width=True):
+# ── Tabs ─────────────────────────────────────────────────────
+tab_fleet, tab_single, tab_models = st.tabs([
+    "🏢 Fleet Dashboard",
+    "🔍 Single Server Prediction",
+    "📊 Model Comparison"
+])
 
-    raw = np.array([[cpu, memory, disk, network,
-                     processes, threads, context_sw, cache_miss,
-                     temperature, power, uptime]])
-    scaled    = scaler.transform(raw)
-    full_inp  = add_engineered_features(scaled, cpu, memory, temperature)
-    pred      = model.predict(full_inp)[0]
-    prob      = model.predict_proba(full_inp)[0][1]
-    risk_label, alert_type = get_risk(prob)
+# ════════════════════════════════════════════════════════════
+# TAB 1 — FLEET DASHBOARD
+# ════════════════════════════════════════════════════════════
+with tab_fleet:
+    st.header("🏢 Fleet Overview")
+    st.markdown("Monitor all servers, see which are at risk, and understand why.")
+
+    data_source = st.radio(
+        "Data source",
+        ["Use sample fleet (demo)", "Upload CSV"],
+        horizontal=True
+    )
+
+    if data_source == "Upload CSV":
+        st.info("""
+        Upload a CSV with these columns:
+        `server_id, cpu, memory, disk, network, processes, threads,
+        context_sw, cache_miss, temperature, power, uptime`
+        """)
+        uploaded = st.file_uploader("Upload server metrics CSV", type=["csv"])
+        if uploaded:
+            fleet_df = pd.read_csv(uploaded)
+        else:
+            fleet_df = None
+    else:
+        fleet_df = generate_sample_fleet(20)
+
+    if fleet_df is not None:
+        with st.spinner("Running predictions on all servers…"):
+            results_df = predict_batch(fleet_df)
+            combined = pd.concat([fleet_df.reset_index(drop=True),
+                                   results_df.reset_index(drop=True)], axis=1)
+
+        # ── Summary Cards ────────────────────────────────────
+        total  = len(combined)
+        high   = (results_df["_prob"] >= 0.60).sum()
+        medium = ((results_df["_prob"] >= 0.30) & (results_df["_prob"] < 0.60)).sum()
+        low    = (results_df["_prob"] < 0.30).sum()
+        failed = (results_df["_pred"] == 1).sum()
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Total Servers", total)
+        c2.metric("🟢 Healthy",    int(low))
+        c3.metric("🟡 Medium Risk",int(medium))
+        c4.metric("🔴 High Risk",  int(high))
+        c5.metric("⚠️ Predicted Failed", int(failed))
+
+        st.markdown("---")
+
+        # ── Filter ───────────────────────────────────────────
+        filter_opt = st.selectbox(
+            "Filter by risk level",
+            ["All servers", "🔴 High Risk only", "🟡 Medium Risk only", "🟢 Healthy only",
+             "⚠️ Predicted Failed only"]
+        )
+
+        display = combined.copy()
+        if filter_opt == "🔴 High Risk only":
+            display = combined[combined["_prob"] >= 0.60]
+        elif filter_opt == "🟡 Medium Risk only":
+            display = combined[(combined["_prob"] >= 0.30) & (combined["_prob"] < 0.60)]
+        elif filter_opt == "🟢 Healthy only":
+            display = combined[combined["_prob"] < 0.30]
+        elif filter_opt == "⚠️ Predicted Failed only":
+            display = combined[combined["_pred"] == 1]
+
+        st.markdown(f"**Showing {len(display)} server(s)**")
+
+        # ── Main Table ───────────────────────────────────────
+        show_cols = ["server_id", "cpu", "memory", "temperature", "network",
+                     "disk", "power", "Prediction", "Failure Prob",
+                     "Risk Level", "Failure Reason", "_prob", "_pred"]
+        display_show = display[[c for c in show_cols if c in display.columns]]
+
+        styled = (
+            display_show.style
+            .apply(color_risk_row, axis=1)
+            .format({"cpu": "{:.1f}%", "memory": "{:.1f}%",
+                     "temperature": "{:.1f}°C", "network": "{:.0f}ms",
+                     "disk": "{:.1f} MB/s", "power": "{:.0f}W",
+                     "_prob": "{:.1%}"})
+            .hide(axis="index")
+        )
+        st.dataframe(styled, use_container_width=True,
+                     column_config={
+                         "_prob": st.column_config.ProgressColumn(
+                             "Prob Bar", min_value=0, max_value=1, format="%.0f%%"),
+                         "_pred": None,
+                     })
+
+        st.markdown("---")
+
+        # ── Failed Servers Detail ────────────────────────────
+        failed_servers = combined[combined["_pred"] == 1]
+        if len(failed_servers) > 0:
+            st.subheader(f"🚨 Failed Servers — Detail ({len(failed_servers)} server(s))")
+            for _, srv in failed_servers.iterrows():
+                with st.expander(
+                    f"⚠️ {srv['server_id']}  |  Prob: {float(srv['_prob'])*100:.1f}%  "
+                    f"|  {srv['Risk Level']}"
+                ):
+                    d1, d2, d3, d4 = st.columns(4)
+                    d1.metric("CPU",         f"{srv['cpu']}%",
+                              delta=f"{srv['cpu']-70:.0f}%" if srv['cpu'] > 70 else None,
+                              delta_color="inverse")
+                    d2.metric("Memory",      f"{srv['memory']}%",
+                              delta=f"{srv['memory']-75:.0f}%" if srv['memory'] > 75 else None,
+                              delta_color="inverse")
+                    d3.metric("Temperature", f"{srv['temperature']}°C",
+                              delta=f"{srv['temperature']-75:.0f}°C" if srv['temperature'] > 75 else None,
+                              delta_color="inverse")
+                    d4.metric("Network Latency", f"{srv['network']}ms",
+                              delta=f"{srv['network']-100:.0f}ms" if srv['network'] > 100 else None,
+                              delta_color="inverse")
+
+                    st.error(f"**Why this server is failing:** {srv['Failure Reason']}")
+
+                    st.markdown("**Recommended Actions:**")
+                    reasons_text = str(srv["Failure Reason"])
+                    if "CPU" in reasons_text:
+                        st.markdown("- 🔧 Migrate or kill high-CPU processes immediately")
+                    if "Memory" in reasons_text:
+                        st.markdown("- 🔧 Clear memory cache or add RAM — restart memory-heavy services")
+                    if "Overheating" in reasons_text or "Temp" in reasons_text:
+                        st.markdown("- 🔧 Check cooling system / increase fan speed")
+                    if "Network" in reasons_text:
+                        st.markdown("- 🔧 Inspect network interface and switch ports")
+                    if "Power" in reasons_text:
+                        st.markdown("- 🔧 Check PSU health and reduce load")
+                    st.markdown("- 📢 Alert on-call operations team")
+        else:
+            st.success("✅ No servers predicted to fail — fleet is healthy!")
+
+        # ── Download ─────────────────────────────────────────
+        st.markdown("---")
+        csv_out = combined.drop(columns=["_prob", "_pred"]).to_csv(index=False)
+        st.download_button(
+            "⬇️ Download Report as CSV",
+            data=csv_out,
+            file_name="server_failure_report.csv",
+            mime="text/csv"
+        )
+
+# ════════════════════════════════════════════════════════════
+# TAB 2 — SINGLE SERVER PREDICTION (original)
+# ════════════════════════════════════════════════════════════
+with tab_single:
+    st.header("📥 Enter Server Metrics")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.subheader("💻 System")
+        cpu     = st.slider("CPU Utilization (%)", 0.0, 100.0, 50.0, 0.5)
+        memory  = st.slider("Memory Usage (%)", 0.0, 100.0, 55.0, 0.5)
+        disk    = st.slider("Disk I/O (MB/s)", 0.0, 50.0, 25.0, 0.5)
+        network = st.slider("Network Latency (ms)", 0.0, 200.0, 100.0, 1.0)
+
+    with col2:
+        st.subheader("⚙️ Process")
+        processes  = st.number_input("Process Count", 50, 999, 400, 10)
+        threads    = st.number_input("Thread Count", 100, 4999, 1500, 50)
+        context_sw = st.number_input("Context Switches", 100, 1999, 900, 50)
+        cache_miss = st.slider("Cache Miss Rate", 0.01, 0.20, 0.08, 0.01)
+
+    with col3:
+        st.subheader("🌡️ Hardware")
+        temperature = st.slider("Temperature (°C)", 30.0, 95.0, 60.0, 0.5)
+        power       = st.slider("Power (W)", 50.0, 300.0, 175.0, 5.0)
+        uptime      = st.number_input("Uptime (hours)", 1.0, 1000.0, 300.0, 10.0)
 
     st.markdown("---")
-    st.header("📊 Prediction Result")
+    st.subheader("⚠️ Live Health Status")
+    h1, h2, h3, h4 = st.columns(4)
+    with h1:
+        if cpu > 85:      st.error(f"🔴 CPU: {cpu}% — Critical")
+        elif cpu > 70:    st.warning(f"🟡 CPU: {cpu}% — High")
+        else:             st.success(f"🟢 CPU: {cpu}% — Normal")
+    with h2:
+        if memory > 90:   st.error(f"🔴 Memory: {memory}% — Critical")
+        elif memory > 75: st.warning(f"🟡 Memory: {memory}% — High")
+        else:             st.success(f"🟢 Memory: {memory}% — Normal")
+    with h3:
+        if temperature > 85:   st.error(f"🔴 Temp: {temperature}°C — Critical")
+        elif temperature > 75: st.warning(f"🟡 Temp: {temperature}°C — High")
+        else:                  st.success(f"🟢 Temp: {temperature}°C — Normal")
+    with h4:
+        if network > 150:  st.error(f"🔴 Latency: {network}ms — Critical")
+        elif network > 100:st.warning(f"🟡 Latency: {network}ms — High")
+        else:              st.success(f"🟢 Latency: {network}ms — Normal")
 
-    r1, r2, r3 = st.columns(3)
-    with r1:
-        st.metric("Prediction",
-                  "⚠️ SERVER FAILURE" if pred == 1 else "✅ NORMAL")
-    with r2:
-        st.metric("Failure Probability", f"{prob*100:.1f}%")
-    with r3:
-        st.metric("Risk Level", risk_label)
+    st.markdown("---")
+    if st.button("🔍 PREDICT FAILURE RISK", type="primary", use_container_width=True):
+        raw = np.array([[cpu, memory, disk, network,
+                         processes, threads, context_sw, cache_miss,
+                         temperature, power, uptime]])
+        scaled    = scaler.transform(raw)
+        full_inp  = add_engineered_features(scaled, cpu, memory, temperature)
+        pred      = model.predict(full_inp)[0]
+        prob      = model.predict_proba(full_inp)[0][1]
+        risk_label, alert_type = get_risk(prob)
 
-    st.subheader("📈 Probability Gauge")
-    st.progress(float(prob))
-    g1, g2, g3 = st.columns(3)
-    with g1: st.markdown("🟢 LOW (0–30%)")
-    with g2: st.markdown("🟡 MEDIUM (30–60%)")
-    with g3: st.markdown("🔴 HIGH (60–100%)")
+        st.markdown("---")
+        st.header("📊 Prediction Result")
 
-    if alert_type == "error":
-        st.error(f"""
-        🚨 HIGH RISK — IMMEDIATE ACTION REQUIRED!
-        Failure probability: {prob*100:.1f}%
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            st.metric("Prediction", "⚠️ SERVER FAILURE" if pred == 1 else "✅ NORMAL")
+        with r2:
+            st.metric("Failure Probability", f"{prob*100:.1f}%")
+        with r3:
+            st.metric("Risk Level", risk_label)
 
-        ⚡ Actions:
-        - Check CPU and Memory immediately
-        - Monitor temperature — possible overheating
-        - Migrate workloads to another server
-        - Alert operations team NOW
-        """)
-    elif alert_type == "warning":
-        st.warning(f"""
-        ⚠️ MEDIUM RISK — Monitor Closely
-        Failure probability: {prob*100:.1f}%
+        st.subheader("📈 Probability Gauge")
+        st.progress(float(prob))
+        g1, g2, g3 = st.columns(3)
+        with g1: st.markdown("🟢 LOW (0–30%)")
+        with g2: st.markdown("🟡 MEDIUM (30–60%)")
+        with g3: st.markdown("🔴 HIGH (60–100%)")
 
-        📋 Actions:
-        - Monitor server metrics continuously
-        - Close non-essential processes
-        - Check cooling system
-        - Prepare backup server
-        """)
-    else:
-        st.success(f"""
-        ✅ LOW RISK — Server is Healthy
-        Failure probability: {prob*100:.1f}%
-        Server is operating within normal parameters.
-        """)
+        reason = get_failure_reasons(cpu, memory, disk, network,
+                                     processes, threads, context_sw,
+                                     cache_miss, temperature, power, uptime)
+        if alert_type == "error":
+            st.error(f"""
+🚨 HIGH RISK — IMMEDIATE ACTION REQUIRED!
+Failure probability: {prob*100:.1f}%
+**Why:** {reason}
 
-    # Input summary
-    st.subheader("📋 Input Summary")
-    summary = pd.DataFrame({
-        "Metric": ["CPU","Memory","Disk I/O","Network Latency",
-                   "Processes","Threads","Context Switches","Cache Miss",
-                   "Temperature","Power","Uptime"],
-        "Value" : [f"{cpu}%", f"{memory}%", f"{disk} MB/s",
-                   f"{network} ms", str(processes), str(threads),
-                   str(context_sw), str(cache_miss),
-                   f"{temperature}°C", f"{power}W", f"{uptime}h"],
-        "Status": [
-            "🔴 Critical" if cpu>85 else ("🟡 High" if cpu>70 else "🟢 Normal"),
-            "🔴 Critical" if memory>90 else ("🟡 High" if memory>75 else "🟢 Normal"),
-            "🟢 Normal",
-            "🔴 Critical" if network>150 else ("🟡 High" if network>100 else "🟢 Normal"),
-            "🟢 Normal","🟢 Normal","🟢 Normal","🟢 Normal",
-            "🔴 Critical" if temperature>85 else ("🟡 High" if temperature>75 else "🟢 Normal"),
-            "🔴 Critical" if power>250 else ("🟡 High" if power>200 else "🟢 Normal"),
-            "🟢 Normal"
-        ]
-    })
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+⚡ Actions:
+- Check CPU and Memory immediately
+- Monitor temperature — possible overheating
+- Migrate workloads to another server
+- Alert operations team NOW
+            """)
+        elif alert_type == "warning":
+            st.warning(f"""
+⚠️ MEDIUM RISK — Monitor Closely
+Failure probability: {prob*100:.1f}%
+**Why:** {reason}
 
-# ── Model Comparison ─────────────────────────────────────────
-st.markdown("---")
-with st.expander("📊 Full Model Comparison — 100K Dataset"):
+📋 Actions:
+- Monitor server metrics continuously
+- Close non-essential processes
+- Check cooling system
+- Prepare backup server
+            """)
+        else:
+            st.success(f"""
+✅ LOW RISK — Server is Healthy
+Failure probability: {prob*100:.1f}%
+Server is operating within normal parameters.
+            """)
+
+        st.subheader("📋 Input Summary")
+        summary = pd.DataFrame({
+            "Metric": ["CPU","Memory","Disk I/O","Network Latency",
+                       "Processes","Threads","Context Switches","Cache Miss",
+                       "Temperature","Power","Uptime"],
+            "Value" : [f"{cpu}%", f"{memory}%", f"{disk} MB/s",
+                       f"{network} ms", str(processes), str(threads),
+                       str(context_sw), str(cache_miss),
+                       f"{temperature}°C", f"{power}W", f"{uptime}h"],
+            "Status": [
+                "🔴 Critical" if cpu>85 else ("🟡 High" if cpu>70 else "🟢 Normal"),
+                "🔴 Critical" if memory>90 else ("🟡 High" if memory>75 else "🟢 Normal"),
+                "🟢 Normal",
+                "🔴 Critical" if network>150 else ("🟡 High" if network>100 else "🟢 Normal"),
+                "🟢 Normal","🟢 Normal","🟢 Normal","🟢 Normal",
+                "🔴 Critical" if temperature>85 else ("🟡 High" if temperature>75 else "🟢 Normal"),
+                "🔴 Critical" if power>250 else ("🟡 High" if power>200 else "🟢 Normal"),
+                "🟢 Normal"
+            ]
+        })
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+
+# ════════════════════════════════════════════════════════════
+# TAB 3 — MODEL COMPARISON (original)
+# ════════════════════════════════════════════════════════════
+with tab_models:
     st.subheader("All Models Performance")
     comp = pd.DataFrame({
         "Model"    : ["Logistic Regression","Decision Tree","Random Forest ★",
